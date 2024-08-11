@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euf -o pipefail
+
+# configuration
+cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}"
+[ -f "${cfgDir}/config" ] && source "${cfgDir}/config"
+## START VARS from config
+: ${MY_GPGDIR:=}
+: ${MY_GPG_JSON_PATH:=${cfgDir}/totp-cli-rofi/json.pgp}
+: ${MY_NAMES_TXT_PATH:=${cfgDir}/totp-cli-rofi/names.txt}
+: ${MY_DISABLE_GPG:=}
+## END VARS from config
+[ -n "${MY_GPGDIR}" ] && export GNUPGHOME="${MY_GPGDIR}"
+
+my_decrypt() {
+  case "${MY_DISABLE_GPG}" in
+    y|yes|1)output="$(cat -)";;
+    *)output="$(cat - | gpg -d)";;
+  esac
+  echo "${output}"
+}
+my_help() {
+  cat >&2 << EOF
+Getting started with ${0}
+
+Create config folder
+> mkdir -pv "${cfgDir}"
+
+Create config file (optional) see "VARS from config" above
+> touch "${cfgDir}/config"
+
+Create simple json file with format
+{ "TEXT NAME": {"secret":"SECRET","digits":6,"period":30,"issuer":"TEXT ISSUER",NEXT ... }
+example json and creation of gpg encrypted ${MY_GPG_JSON_PATH}
+> echo '{ "Example.com":{"secret": "P8AKZ4RBH81ROVBH","digits": 6,"period": 30,"issuer": "Example"},NEXT ... }' | gpg -ear "GPG_KEY_ID" > "${MY_GPG_JSON_PATH}"
+
+optional and not recommended - disable encryption
+> echo "MY_DISABLE_GPG=1" >> "${cfgDir}/config"
+
+EOF
+}
+my_check() {
+  if [ ! -e "${MY_GPG_JSON_PATH}" ]; then
+    echo "json.pgp filepath ${MY_GPG_JSON_PATH} does not exist!" >&2
+    echo ""
+    my_help
+    exit 1
+  fi
+  if [ ! -e "${MY_NAMES_TXT_PATH}" ]; then
+    # text file is missing - create it.
+    namesTXTContent="$(cat "${MY_GPG_JSON_PATH}" | my_decrypt | jq -r 'keys[]')"
+    [ ! -z "${namesTXTContent}" ] && echo "${namesTXTContent}" > "${MY_NAMES_TXT_PATH}"
+  fi
+}
+
+mode=${1:-}
+
+if [ "$mode" == "_rofi" ]; then
+  # pass "_rofi" as $1 to handle rofi part
+  [ "$#" -ge 2 ] && name="$2" || name=""
+  if [ -n "$name" ]; then
+    coproc "$0" "_rofi" "$name" "yes" >/dev/null 2>&1
+    exec 1>&-
+    exit
+  fi
+  my_check
+  cat "${MY_NAMES_TXT_PATH}"
+  exit
+elif [ "$mode" == "--help" ]; then
+  # pass "--help" as $1 for help
+  my_help
+  exit
+fi
+unset mode
+
+my_check
+
+name=${1-}
+if [ -z "$name" ]; then
+  if [ ! -t 0 ]; then
+    echo "name is empty!" 1>&2
+    exit 1
+  fi
+  name=$(cat "${MY_NAMES_TXT_PATH}" | fzf)
+fi
+totp="$(
+  oathtool --totp=sha1 \
+    $(
+      cat "${MY_GPG_JSON_PATH}" |
+        my_decrypt |
+        jq -r ".\"$name\""'|"-d \(.digits) -s \(.period) -b \(.secret)"' |
+        tr -d '\n'
+    )
+)"
+[ -n "$DISPLAY" ] &&
+  (
+    xdotool type "$totp"
+    xdotool key Return
+  ) ||
+  echo "$totp"
