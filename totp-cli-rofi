@@ -9,8 +9,6 @@ cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}"
 : ${MY_GPGDIR:=}
 # path to json file
 : ${MY_GPG_JSON_PATH:=${cfgDir}/totp-cli-rofi/json.pgp}
-# where to put names file, which is generated from the json file
-: ${MY_NAMES_TXT_PATH:=${cfgDir}/totp-cli-rofi/names.txt}
 # disable encryption
 : ${MY_DISABLE_GPG:=0}
 # should code be autopasted (xdotool)
@@ -20,22 +18,31 @@ cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}"
 ## END VARS from config
 [ -n "${MY_GPGDIR}" ] && export GNUPGHOME="${MY_GPGDIR}"
 
+# use hash of json.pgp contents as cache for names
+MY_NAMES_TXT_PATH="/tmp/totp-cli-rofi-names-$(sha256sum "${MY_GPG_JSON_PATH}" | cut -d ' ' -f1 | tr -d '\n')"
+
 my_istrue() {
   case "$1" in
-    y|yes|1)return 0;;
-    *)return 1;;
+  y | yes | 1) return 0 ;;
+  *) return 1 ;;
   esac
 }
 my_decrypt() {
   returnCode=0
-  my_istrue "${MY_DISABLE_GPG}" \
-    && { output="$(cat -)" ; returnCode="$?"; } \
-    || { output="$(cat - | gpg -d)" ; returnCode="$?"; }
+  my_istrue "${MY_DISABLE_GPG}" &&
+    {
+      output="$(cat -)"
+      returnCode="$?"
+    } ||
+    {
+      output="$(cat - | gpg -d)"
+      returnCode="$?"
+    }
   echo "${output}"
   return "${returnCode}"
 }
 my_help() {
-  cat >&2 << EOF
+  cat >&2 <<EOF
 Getting started with ${0}
 
 Create config folder
@@ -77,13 +84,16 @@ my_check() {
   if [ ! -e "${MY_NAMES_TXT_PATH}" ]; then
     # text file is missing - create it.
     namesTXTContent="$(cat "${MY_GPG_JSON_PATH}" | my_decrypt | jq -r 'keys[]')"
-    [ ! -z "${namesTXTContent}" ] && echo "${namesTXTContent}" > "${MY_NAMES_TXT_PATH}"
+    [ ! -z "${namesTXTContent}" ] && echo "${namesTXTContent}" >"${MY_NAMES_TXT_PATH}"
   fi
 }
 
 name="${1:-}"
 
-[ "$name" == "--help" ] && { my_help; exit; }
+[ "$name" == "--help" ] || [ "$name" == "-h" ] && {
+  my_help
+  exit
+}
 
 if [ -z "${SKIP_ROFI_PART:-}" ] && [ -n "${DISPLAY}" ] && [ -n "${ROFI_RETV:-}" ]; then
   # rofi mode
@@ -112,10 +122,10 @@ if [ -z "$name" ]; then
 fi
 
 totpParams="$(
-  cat "${MY_GPG_JSON_PATH}" \
-    | my_decrypt \
-    | jq -r ".\"$name\""'|"-d \(.digits) -s \(.period) -b \(.secret)"' \
-    | tr -d '\n'
+  cat "${MY_GPG_JSON_PATH}" |
+    my_decrypt |
+    jq -r ".\"$name\""'|"-d \(.digits) -s \(.period) -b \(.secret)"' |
+    tr -d '\n'
 )"
 
 totp="$(oathtool --totp=sha1 ${totpParams})"
@@ -123,7 +133,10 @@ if [ -n "${DISPLAY}" ]; then
   # load into clipboard if required
   my_istrue "${MY_AUTOCLIPBOARD}" && echo "$totp" | xclip -selection clipboard
   # autopaste if required
-  my_istrue "${MY_AUTOPASTE}" && { xdotool type "$totp" ; xdotool key Return; }
+  my_istrue "${MY_AUTOPASTE}" && {
+    xdotool type "$totp"
+    xdotool key Return
+  }
   # as last resort echo the code
   ! my_istrue "${MY_AUTOCLIPBOARD}" && ! my_istrue "${MY_AUTOPASTE}" && echo "$totp"
 else
