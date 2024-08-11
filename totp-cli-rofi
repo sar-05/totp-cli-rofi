@@ -5,19 +5,34 @@ set -euf -o pipefail
 cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}"
 [ -f "${cfgDir}/config" ] && source "${cfgDir}/config"
 ## START VARS from config
+# override GNUPGHOME var
 : ${MY_GPGDIR:=}
+# path to json file
 : ${MY_GPG_JSON_PATH:=${cfgDir}/totp-cli-rofi/json.pgp}
+# where to put names file, which is generated from the json file
 : ${MY_NAMES_TXT_PATH:=${cfgDir}/totp-cli-rofi/names.txt}
-: ${MY_DISABLE_GPG:=}
+# disable encryption
+: ${MY_DISABLE_GPG:=0}
+# should code be autopasted (xdotool)
+: ${MY_AUTOPASTE:=1}
+# should code be loaded into clipboard (xclip)
+: ${MY_AUTOCLIPBOARD:=0}
 ## END VARS from config
 [ -n "${MY_GPGDIR}" ] && export GNUPGHOME="${MY_GPGDIR}"
 
-my_decrypt() {
-  case "${MY_DISABLE_GPG}" in
-    y|yes|1)output="$(cat -)";;
-    *)output="$(cat - | gpg -d)";;
+my_istrue() {
+  case "$1" in
+    y|yes|1)return 0;;
+    *)return 1;;
   esac
+}
+my_decrypt() {
+  returnCode=0
+  my_istrue "${MY_DISABLE_GPG}" \
+    && { output="$(cat -)" ; returnCode="$?"; } \
+    || { output="$(cat - | gpg -d)" ; returnCode="$?"; }
   echo "${output}"
+  return "${returnCode}"
 }
 my_help() {
   cat >&2 << EOF
@@ -33,6 +48,19 @@ Create simple json file with format
 { "TEXT NAME": {"secret":"SECRET","digits":6,"period":30,"issuer":"TEXT ISSUER",NEXT ... }
 example json and creation of gpg encrypted ${MY_GPG_JSON_PATH}
 > echo '{ "Example.com":{"secret": "P8AKZ4RBH81ROVBH","digits": 6,"period": 30,"issuer": "Example"},NEXT ... }' | gpg -ear "GPG_KEY_ID" > "${MY_GPG_JSON_PATH}"
+
+rofi example
+> rofi -show totp -modi totp:totp-cli-rofi
+
+cli example
+> totp-cli-rofi # use fzf to choose the name ( needs TTY )
+> totp-cli-rofi "Example Name" # select the option by Name directly
+
+optional disable autopaste
+> echo "MY_AUTOPASTE=0" >> "${cfgDir}/config"
+
+optional enable autoclipboard
+> echo "MY_AUTOCLIPBOARD=1" >> "${cfgDir}/config"
 
 optional and not recommended - disable encryption
 > echo "MY_DISABLE_GPG=1" >> "${cfgDir}/config"
@@ -53,29 +81,28 @@ my_check() {
   fi
 }
 
-mode=${1:-}
+name="${1:-}"
 
-if [ "$mode" == "_rofi" ]; then
-  # pass "_rofi" as $1 to handle rofi part
-  [ "$#" -ge 2 ] && name="$2" || name=""
+[ "$name" == "--help" ] && { my_help; exit; }
+
+if [ -z "${SKIP_ROFI_PART:-}" ] && [ -n "${DISPLAY}" ] && [ -n "${ROFI_RETV:-}" ]; then
+  # rofi mode
   if [ -n "$name" ]; then
-    coproc "$0" "_rofi" "$name" "yes" >/dev/null 2>&1
+    # option has been selected
+    export SKIP_ROFI_PART=1
+    coproc "$0" "$name" >/dev/null 2>&1
     exec 1>&-
     exit
+  else
+    # print options
+    my_check
+    cat "${MY_NAMES_TXT_PATH}"
+    exit
   fi
-  my_check
-  cat "${MY_NAMES_TXT_PATH}"
-  exit
-elif [ "$mode" == "--help" ]; then
-  # pass "--help" as $1 for help
-  my_help
-  exit
 fi
-unset mode
 
 my_check
 
-name=${1-}
 if [ -z "$name" ]; then
   if [ ! -t 0 ]; then
     echo "name is empty!" 1>&2
@@ -83,18 +110,23 @@ if [ -z "$name" ]; then
   fi
   name=$(cat "${MY_NAMES_TXT_PATH}" | fzf)
 fi
-totp="$(
-  oathtool --totp=sha1 \
-    $(
-      cat "${MY_GPG_JSON_PATH}" |
-        my_decrypt |
-        jq -r ".\"$name\""'|"-d \(.digits) -s \(.period) -b \(.secret)"' |
-        tr -d '\n'
-    )
+
+totpParams="$(
+  cat "${MY_GPG_JSON_PATH}" \
+    | my_decrypt \
+    | jq -r ".\"$name\""'|"-d \(.digits) -s \(.period) -b \(.secret)"' \
+    | tr -d '\n'
 )"
-[ -n "$DISPLAY" ] &&
-  (
-    xdotool type "$totp"
-    xdotool key Return
-  ) ||
+
+totp="$(oathtool --totp=sha1 ${totpParams})"
+if [ -n "${DISPLAY}" ]; then
+  # load into clipboard if required
+  my_istrue "${MY_AUTOCLIPBOARD}" && echo "$totp" | xclip -selection clipboard
+  # autopaste if required
+  my_istrue "${MY_AUTOPASTE}" && { xdotool type "$totp" ; xdotool key Return; }
+  # as last resort echo the code
+  ! my_istrue "${MY_AUTOCLIPBOARD}" && ! my_istrue "${MY_AUTOPASTE}" && echo "$totp"
+else
+  # not in a GUI session - echo the code
   echo "$totp"
+fi
