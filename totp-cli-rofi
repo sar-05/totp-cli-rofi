@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 set -euf -o pipefail
 
-# configuration
+# Configuration Directory
 cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}/totp-cli-rofi"
+[ ! -d "$cfgDir" ] && mkdir -p "$cfgDir"
 [ -f "${cfgDir}/config" ] && source "${cfgDir}/config"
-## START VARS from config
+
+# Start vars from config
 # override GNUPGHOME var
 : ${MY_GPGDIR:=}
 # path to json file
 : ${MY_GPG_JSON_PATH:=${cfgDir}/json.pgp}
-# disable encryption
+# disable encryption (not recommended)
 : ${MY_DISABLE_GPG:=0}
 # should code be autopasted (xdotool)
 : ${MY_AUTOPASTE:=1}
@@ -20,15 +22,15 @@ cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}/totp-cli-rofi"
 ## END VARS from config
 [ -n "${MY_GPGDIR}" ] && export GNUPGHOME="${MY_GPGDIR}"
 
-# use hash of json.pgp contents as cache for names
-MY_NAMES_TXT_PATH="${TMPDIR:-/tmp}/totp-cli-rofi-names-$(sha256sum "${MY_GPG_JSON_PATH}" | cut -d ' ' -f1 | tr -d '\n')"
-
+# Checks if config var is true or false
 my_istrue() {
   case "$1" in
   y | yes | 1) return 0 ;;
   *) return 1 ;;
   esac
 }
+
+# decrypts data or passes it through
 my_decrypt() {
   returnCode=0
   my_istrue "${MY_DISABLE_GPG}" &&
@@ -43,12 +45,11 @@ my_decrypt() {
   echo "${output}"
   return "${returnCode}"
 }
+
+# Prints out help message
 my_help() {
   cat >&2 <<EOF
 Getting started with ${0}
-
-Create config folder
-> mkdir -pv "${cfgDir}"
 
 Create config file (optional) see "VARS from config" above
 > touch "${cfgDir}/config"
@@ -76,6 +77,8 @@ optional and not recommended - disable encryption
 
 EOF
 }
+
+# Checks if json.pg and names text file exist.
 my_check() {
   if [ ! -e "${MY_GPG_JSON_PATH}" ]; then
     echo "json.pgp filepath ${MY_GPG_JSON_PATH} does not exist!" >&2
@@ -83,15 +86,21 @@ my_check() {
     my_help
     exit 1
   fi
+  
+  # use hash of json.pgp contents as cache for names text path
+  MY_NAMES_TXT_PATH="${TMPDIR:-/tmp}/totp-cli-rofi-names-$(sha256sum "${MY_GPG_JSON_PATH}" | cut -d ' ' -f1 | tr -d '\n')"
+  
   if [ ! -e "${MY_NAMES_TXT_PATH}" ]; then
-    # text file is missing - create it.
+    # text file that contains entries names is missing - create it.
     namesTXTContent="$(cat "${MY_GPG_JSON_PATH}" | my_decrypt | jq -r 'keys[]')"
     [ ! -z "${namesTXTContent}" ] && echo "${namesTXTContent}" >"${MY_NAMES_TXT_PATH}"
   fi
 }
 
+# Grab the argument passed to the script. Default is empty
 name="${1:-}"
 
+# Display help if name matches standard help flags
 [ "$name" == "--help" ] || [ "$name" == "-h" ] && {
   my_help
   exit
@@ -123,6 +132,7 @@ if [ -z "$name" ]; then
   name=$(cat "${MY_NAMES_TXT_PATH}" | fzf)
 fi
 
+# retireves totp parameters of the selected entry
 totpParams="$(
   cat "${MY_GPG_JSON_PATH}" |
     my_decrypt |
