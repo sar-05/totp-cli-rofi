@@ -131,7 +131,19 @@ totpParams="$(
 )"
 
 totp="$(oathtool --totp=sha1 ${totpParams})"
-if [ -n "${DISPLAY}" ]; then
+
+if { [ -z "$DISPLAY" ] && [ -z "$WAYLAND_DISPLAY" ]; } || { ! my_istrue "${MY_AUTOCLIPBOARD}" && ! my_istrue "${MY_AUTOPASTE}"; }; then
+  echo "$totp"
+elif [ -n "${WAYLAND_DISPLAY}" ]; then
+  my_istrue "${MY_AUTOCLIPBOARD}" && echo "$totp" | wl-copy
+  # autopaste if required
+  my_istrue "${MY_AUTOPASTE}" && {
+    ydotool type "$totp"
+    # delay pressing enter
+    [ -n "${MY_AUTOPASTE_DELAY}" ] && sleep "${MY_AUTOPASTE_DELAY}"
+    ydotool key Return
+  }
+else
   # load into clipboard if required
   my_istrue "${MY_AUTOCLIPBOARD}" && echo "$totp" | xclip -selection clipboard
   # autopaste if required
@@ -141,9 +153,4 @@ if [ -n "${DISPLAY}" ]; then
     [ -n "${MY_AUTOPASTE_DELAY}" ] && sleep "${MY_AUTOPASTE_DELAY}"
     xdotool key Return
   }
-  # as last resort echo the code
-  ! my_istrue "${MY_AUTOCLIPBOARD}" && ! my_istrue "${MY_AUTOPASTE}" && echo "$totp"
-else
-  # not in a GUI session - echo the code
-  echo "$totp"
 fi
