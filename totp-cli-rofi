@@ -2,13 +2,13 @@
 set -euf -o pipefail
 
 # configuration
-cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}"
+cfgDir="${XDG_CONFIG_HOME:-$HOME/.config}/totp-cli-rofi"
 [ -f "${cfgDir}/config" ] && source "${cfgDir}/config"
 ## START VARS from config
 # override GNUPGHOME var
 : ${MY_GPGDIR:=}
 # path to json file
-: ${MY_GPG_JSON_PATH:=${cfgDir}/totp-cli-rofi/json.pgp}
+: ${MY_GPG_JSON_PATH:=${cfgDir}/json.pgp}
 # disable encryption
 : ${MY_DISABLE_GPG:=0}
 # should code be autopasted (xdotool)
